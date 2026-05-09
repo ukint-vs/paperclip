@@ -601,6 +601,7 @@ describe.sequential("issue comment reopen routes", () => {
         authorType: "user",
         presentation: { kind: "system_notice", tone: "warning", detailsDefaultOpen: false },
         metadata,
+        idempotencyKey: null,
       },
     );
   });

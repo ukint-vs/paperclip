@@ -83,6 +83,10 @@ function assertTransition(from: string, to: string) {
   }
 }
 
+function isUniqueViolation(err: unknown): boolean {
+  return !!err && typeof err === "object" && "code" in err && (err as { code?: string }).code === "23505";
+}
+
 function applyStatusSideEffects(
   status: string | undefined,
   patch: Partial<typeof issues.$inferInsert>,
@@ -3851,6 +3855,7 @@ export function issueService(db: Db) {
         presentation?: IssueCommentPresentation | null;
         metadata?: IssueCommentMetadata | null;
         createdAt?: Date | string | null;
+        idempotencyKey?: string | null;
       },
     ) => {
       const issue = await db
@@ -3872,21 +3877,100 @@ export function issueService(db: Db) {
       const presentation = issueCommentPresentationSchema.nullable().parse(options?.presentation ?? null);
       const metadata = issueCommentMetadataSchema.nullable().parse(options?.metadata ?? null);
       const createdAt = options?.createdAt ? new Date(options.createdAt) : null;
-      const [comment] = await db
-        .insert(issueComments)
-        .values({
-          companyId: issue.companyId,
-          issueId,
-          authorAgentId: actor.agentId ?? null,
-          authorUserId: actor.userId ?? null,
-          authorType,
-          createdByRunId: actor.runId ?? null,
-          body: redactedBody,
-          presentation,
-          metadata,
-          ...(createdAt && !Number.isNaN(createdAt.getTime()) ? { createdAt } : {}),
-        })
-        .returning();
+      const idempotencyKey = typeof options?.idempotencyKey === "string" && options.idempotencyKey.trim().length > 0
+        ? options.idempotencyKey.trim()
+        : null;
+
+      // Hybrid comment dedupe (APE-139). Both branches return the existing row on a duplicate.
+      //
+      // 1. Explicit idempotencyKey: scoped to (companyId, issueId). 5-minute lookback covers most
+      //    upstream-retry windows; the partial unique index makes concurrent inserts safe.
+      // 2. Server-derived: (companyId, author, issueId, body) within 10s. Catches the observed
+      //    upstream-timeout retry pattern (same author, same body, span <5s on long markdown).
+      if (idempotencyKey) {
+        const existingByKey = await db
+          .select()
+          .from(issueComments)
+          .where(
+            and(
+              eq(issueComments.companyId, issue.companyId),
+              eq(issueComments.issueId, issueId),
+              eq(issueComments.idempotencyKey, idempotencyKey),
+              gt(issueComments.createdAt, sql`now() - interval '5 minutes'`),
+            ),
+          )
+          .limit(1)
+          .then((rows) => rows[0] ?? null);
+        if (existingByKey) {
+          return redactIssueComment(existingByKey, currentUserRedactionOptions.enabled);
+        }
+      } else {
+        const authorPredicate = actor.agentId
+          ? eq(issueComments.authorAgentId, actor.agentId)
+          : actor.userId
+            ? eq(issueComments.authorUserId, actor.userId)
+            : null;
+        if (authorPredicate) {
+          const existingByBody = await db
+            .select()
+            .from(issueComments)
+            .where(
+              and(
+                eq(issueComments.companyId, issue.companyId),
+                eq(issueComments.issueId, issueId),
+                authorPredicate,
+                eq(issueComments.body, redactedBody),
+                gt(issueComments.createdAt, sql`now() - interval '10 seconds'`),
+              ),
+            )
+            .limit(1)
+            .then((rows) => rows[0] ?? null);
+          if (existingByBody) {
+            return redactIssueComment(existingByBody, currentUserRedactionOptions.enabled);
+          }
+        }
+      }
+
+      let comment: typeof issueComments.$inferSelect;
+      try {
+        [comment] = await db
+          .insert(issueComments)
+          .values({
+            companyId: issue.companyId,
+            issueId,
+            authorAgentId: actor.agentId ?? null,
+            authorUserId: actor.userId ?? null,
+            authorType,
+            createdByRunId: actor.runId ?? null,
+            body: redactedBody,
+            presentation,
+            metadata,
+            idempotencyKey,
+            ...(createdAt && !Number.isNaN(createdAt.getTime()) ? { createdAt } : {}),
+          })
+          .returning();
+      } catch (err) {
+        // Concurrent insert race against the partial unique index on (companyId, issueId, idempotencyKey).
+        // Re-read the existing row instead of bubbling up a 5xx.
+        if (idempotencyKey && isUniqueViolation(err)) {
+          const existing = await db
+            .select()
+            .from(issueComments)
+            .where(
+              and(
+                eq(issueComments.companyId, issue.companyId),
+                eq(issueComments.issueId, issueId),
+                eq(issueComments.idempotencyKey, idempotencyKey),
+              ),
+            )
+            .limit(1)
+            .then((rows) => rows[0] ?? null);
+          if (existing) {
+            return redactIssueComment(existing, currentUserRedactionOptions.enabled);
+          }
+        }
+        throw err;
+      }
 
       // Update issue's updatedAt so comment activity is reflected in recency sorting
       await db
