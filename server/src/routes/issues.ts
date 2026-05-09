@@ -4426,6 +4426,16 @@ export function issueRoutes(
       }
     }
 
+    // APE-139: hybrid comment dedupe. Accept idempotencyKey via JSON body or
+    // HTTP `Idempotency-Key` header (the body field wins if both are provided).
+    const headerIdempotencyKey = (() => {
+      const raw = req.header("idempotency-key");
+      if (typeof raw !== "string") return null;
+      const trimmed = raw.trim();
+      return trimmed.length > 0 && trimmed.length <= 200 ? trimmed : null;
+    })();
+    const idempotencyKey = (req.body.idempotencyKey ?? null) || headerIdempotencyKey;
+
     const comment = await svc.addComment(id, req.body.body, {
       agentId: actor.agentId ?? undefined,
       userId: actor.actorType === "user" ? actor.actorId : undefined,
@@ -4434,6 +4444,7 @@ export function issueRoutes(
       authorType: req.body.authorType ?? (actor.actorType === "agent" ? "agent" : "user"),
       presentation: req.body.presentation ?? null,
       metadata: req.body.metadata ?? null,
+      idempotencyKey,
     });
     await issueReferencesSvc.syncComment(comment.id);
     const commentReferenceSummaryAfter = await issueReferencesSvc.listIssueReferenceSummary(currentIssue.id);
