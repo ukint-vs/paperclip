@@ -190,7 +190,7 @@ describe("createBufferedOnLog", () => {
     expect(order).toEqual(['{"type":"agent_start"}', '{"type":"agent_end"']);
   });
 
-  it("truncates the partial-line buffer when it grows past the max-line cap", async () => {
+  it("truncates the partial-line buffer when a single fragment exceeds the cap", async () => {
     const { captured, onLog } = captureSink();
     const { handle } = createBufferedOnLog(onLog);
 
@@ -207,5 +207,27 @@ describe("createBufferedOnLog", () => {
     const stdout = captured.filter((c) => c.stream === "stdout");
     expect(stdout).toHaveLength(1);
     expect(stdout[0].chunk).toContain('"agent_end"');
+  });
+
+  it("does not drop complete lines when one batched stdout chunk exceeds the cap", async () => {
+    // Sandbox runners forward result.stdout in one onLog("stdout", ...) call.
+    // Builds a single chunk of 105 normal-sized lines totaling >8MB and
+    // verifies all lines are forwarded (no truncation alarm).
+    const { captured, onLog } = captureSink();
+    const { handle } = createBufferedOnLog(onLog);
+
+    const padding = "x".repeat(80 * 1024); // ~80KB per line
+    const linesArr = Array.from({ length: 105 }, (_, i) =>
+      JSON.stringify({ type: i === 104 ? "agent_end" : "agent_start", padding }),
+    );
+    const chunk = linesArr.join("\n") + "\n";
+    expect(chunk.length).toBeGreaterThan(8 * 1024 * 1024);
+    await handle("stdout", chunk);
+
+    const stdout = captured.filter((c) => c.stream === "stdout");
+    expect(stdout).toHaveLength(105);
+    expect(stdout[stdout.length - 1].chunk).toContain('"agent_end"');
+    const stderr = captured.filter((c) => c.stream === "stderr");
+    expect(stderr).toHaveLength(0);
   });
 });

@@ -1,4 +1,4 @@
-import { isDroppableDeltaLine } from "./parse.js";
+import { isDroppableDeltaLine } from "../pi-event-types.js";
 
 export type LogStream = "stdout" | "stderr";
 export type OnLog = (stream: LogStream, chunk: string) => Promise<void>;
@@ -50,32 +50,30 @@ export function createBufferedOnLog(onLog: OnLog): BufferedOnLogHandle {
   // its own invariant so concurrent calls cannot interleave buffer state.
   let queue: Promise<void> = Promise.resolve();
 
-  const truncateIfHuge = async (): Promise<void> => {
-    if (stdoutBuffer.length <= MAX_LINE_BYTES) return;
-    const dropped = stdoutBuffer.length;
-    stdoutBuffer = "";
-    // Surface the drop on stderr so operators see it; the truncated payload
-    // is gone but the alarm survives. pi-agent emitting an 8MB+ single line
-    // means something is very wrong upstream.
-    await onLog(
-      "stderr",
-      `[paperclip] dropped ${dropped} bytes from pi stdout buffer (no newline within ${MAX_LINE_BYTES} bytes)\n`,
-    );
-  };
-
   const processStdoutChunk = async (chunk: string): Promise<void> => {
     stdoutBuffer += chunk;
-    if (stdoutBuffer.length > MAX_LINE_BYTES) {
-      await truncateIfHuge();
-      return;
-    }
     const lines = stdoutBuffer.split("\n");
+    // Drain any complete lines first so a single batched stdout call (e.g.
+    // sandbox runners that forward `result.stdout` in one piece) does not
+    // trip the cap on the aggregate buffer and lose the whole transcript.
     stdoutBuffer = lines.pop() ?? "";
 
     for (const line of lines) {
       if (!line) continue;
       if (isDroppableDeltaLine(line)) continue;
       await onLog("stdout", line + "\n");
+    }
+
+    // Apply the cap only to the trailing partial fragment. A single line
+    // exceeding MAX_LINE_BYTES means pi-agent emitted an unbounded line
+    // without a newline — drop it and alarm rather than risk OOM.
+    if (stdoutBuffer.length > MAX_LINE_BYTES) {
+      const dropped = stdoutBuffer.length;
+      stdoutBuffer = "";
+      await onLog(
+        "stderr",
+        `[paperclip] dropped ${dropped} bytes from pi stdout buffer (no newline within ${MAX_LINE_BYTES} bytes)\n`,
+      );
     }
   };
 

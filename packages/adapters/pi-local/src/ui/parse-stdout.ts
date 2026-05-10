@@ -1,5 +1,5 @@
 import type { TranscriptEntry } from "@paperclipai/adapter-utils";
-import { PI_DELTA } from "../server/parse.js";
+import { PI_DELTA } from "../pi-event-types.js";
 
 function safeJsonParse(text: string): unknown {
   try {
