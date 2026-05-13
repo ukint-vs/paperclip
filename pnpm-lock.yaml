@@ -620,6 +620,9 @@ importers:
       '@paperclipai/adapter-pi-local':
         specifier: workspace:*
         version: link:../packages/adapters/pi-local
+      '@paperclipai/adapter-reasonix-local':
+        specifier: workspace:*
+        version: link:../packages/adapters/reasonix-local
       '@paperclipai/adapter-utils':
         specifier: workspace:*
         version: link:../packages/adapter-utils

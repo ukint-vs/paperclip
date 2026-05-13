@@ -114,6 +114,16 @@ import {
   modelProfiles as piModelProfiles,
 } from "@paperclipai/adapter-pi-local";
 import {
+  execute as reasonixExecute,
+  testEnvironment as reasonixTestEnvironment,
+  sessionCodec as reasonixSessionCodec,
+  getConfigSchema as getReasonixConfigSchema,
+} from "@paperclipai/adapter-reasonix-local/server";
+import {
+  agentConfigurationDoc as reasonixAgentConfigurationDoc,
+  models as reasonixModels,
+} from "@paperclipai/adapter-reasonix-local";
+import {
   execute as hermesExecute,
   testEnvironment as hermesTestEnvironment,
   sessionCodec as hermesSessionCodec,
@@ -273,6 +283,21 @@ const acpxLocalAdapter: ServerAdapterModule = {
   requiresMaterializedRuntimeSkills: false,
   agentConfigurationDoc: acpxAgentConfigurationDoc,
   getConfigSchema: getAcpxConfigSchema,
+};
+
+const reasonixLocalAdapter: ServerAdapterModule = {
+  type: "reasonix_local",
+  execute: reasonixExecute,
+  testEnvironment: reasonixTestEnvironment,
+  sessionCodec: reasonixSessionCodec,
+  sessionManagement: getAdapterSessionManagement("reasonix_local") ?? undefined,
+  models: reasonixModels,
+  supportsLocalAgentJwt: true,
+  supportsInstructionsBundle: true,
+  instructionsPathKey: "instructionsFilePath",
+  requiresMaterializedRuntimeSkills: false,
+  agentConfigurationDoc: reasonixAgentConfigurationDoc,
+  getConfigSchema: getReasonixConfigSchema,
 };
 
 const codexLocalAdapter: ServerAdapterModule = {
@@ -483,6 +508,7 @@ function registerBuiltInAdapters() {
     codexLocalAdapter,
     openCodeLocalAdapter,
     piLocalAdapter,
+    reasonixLocalAdapter,
     cursorCloudAdapter,
     cursorLocalAdapter,
     geminiLocalAdapter,
