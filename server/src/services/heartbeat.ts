@@ -3711,6 +3711,25 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return ensured;
   }
 
+  // APE-139: when a run reaches a terminal-and-not-handed-off status, release
+  // any issue checkouts it still owns. Limited to `succeeded` and `cancelled`
+  // because `failed`/`timed_out` participate in the retry-handoff path where
+  // the next retry inherits the existing checkout (see enqueueProcessLossRetry
+  // and the heartbeat-process-recovery tests). The symptom case in the issue
+  // report (run succeeded, lock stayed) is covered by `succeeded`.
+  const RUN_STATUSES_THAT_RELEASE_CHECKOUT = new Set<string>(["succeeded", "cancelled"]);
+
+  function shouldReleaseCheckoutForStatus(status: string): boolean {
+    return RUN_STATUSES_THAT_RELEASE_CHECKOUT.has(status);
+  }
+
+  async function releaseIssueCheckoutsForRun(runId: string): Promise<void> {
+    await db
+      .update(issues)
+      .set({ checkoutRunId: null, updatedAt: new Date() })
+      .where(eq(issues.checkoutRunId, runId));
+  }
+
   async function setRunStatus(
     runId: string,
     status: string,
@@ -3724,6 +3743,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       .then((rows) => rows[0] ?? null);
 
     if (updated) {
+      if (shouldReleaseCheckoutForStatus(updated.status)) {
+        await releaseIssueCheckoutsForRun(updated.id);
+      }
       publishLiveEvent({
         companyId: updated.companyId,
         type: "heartbeat.run.status",
@@ -4947,6 +4969,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       .then((rows) => rows[0] ?? null);
 
     if (!cancelled) return null;
+
+    // APE-139: belt-and-braces release on terminal transition.
+    await releaseIssueCheckoutsForRun(cancelled.id);
 
     if (cancelled.wakeupRequestId) {
       await db
@@ -8753,6 +8778,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             .then((rows) => rows[0] ?? null);
 
           if (!cancelled) return false;
+
+          // APE-139: belt-and-braces release within the same tx so a cancelled scheduled retry
+          // never leaves a dangling checkout.
+          await tx
+            .update(issues)
+            .set({ checkoutRunId: null, updatedAt: now })
+            .where(eq(issues.checkoutRunId, cancelled.id));
 
           if (scheduledRun.wakeupRequestId) {
             await tx
