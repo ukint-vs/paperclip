@@ -7,11 +7,10 @@ export const DEFAULT_REASONIX_MODEL = "deepseek-v4-flash";
 export const DEFAULT_REASONIX_PRESET = "auto";
 export const DEFAULT_REASONIX_TIMEOUT_SEC = 0;
 
-// Pin to a minimum Reasonix CLI version. The exact release will be filled in
-// once upstream PR #3 (`reasonix acp --mcp`) is tagged. Until then the
-// adapter only works against a local fork link; testEnvironment will warn
-// instead of fail when the version is unrecognized.
-export const REQUIRED_REASONIX_VERSION = "0.0.0";
+// First tag that contains the three ACP plumbing PRs the adapter relies on:
+// #766 (--transcript), #767 (--yolo), #780 (--mcp + --mcp-prefix). v0.42.0-0
+// is a canary; the next stable release in the 0.42.x line works too.
+export const REQUIRED_REASONIX_VERSION = "0.42.0-0";
 
 export const models: AdapterModel[] = [
   { id: "deepseek-v4-flash", label: "DeepSeek V4 Flash" },
